@@ -30,7 +30,9 @@ infra
 
 | Application | Source | Runtime class | Services | Infra dependencies |
 | --- | --- | --- | --- | --- |
-| Dashboard | `apps/dashboard/` | always-on control plane | `dashboard` | Docker socket and host mounts, `shared-postgres` databases `arb` and `news`, `arb-redis`, `shared-qdrant`, `exo-watchdog`, `vnc-manager.service` / IB Gateway, `news-server` |
+| Runtime Control | `Constructure-repos/constructure-runtime-control/` | always-on privileged control plane | `runtime-control` | Docker socket and host mounts, cron spool, `shared-postgres` databases `arb`, `news`, and `runtime_control`, `arb-redis`, `shared-qdrant`, `exo-watchdog`, `news-server` |
+| IBKR | `Constructure-repos/ibkr/` | always-on broker adapter | `ibkr` | `shared-postgres` database `ibkr`, `arb-redis` for watchlist/alerts, `vnc-manager.service` / IB Gateway |
+| Dashboard | `apps/dashboard/` | always-on UI/BFF | `dashboard` | `runtime-control` API, `ibkr` API |
 | VideoProcess | `apps/VideoProcess/` | always-on UI/API plus scheduled workers | `api`, `frontend`, `ffmpeg-worker`, `xtts-api`; consumes `youtube-manager`, `platform-browser-manager`, `xiaohongshu-browser-manager` | `shared-postgres` database `videoprocess`, `vp-redis`, MinIO, `shared-qdrant`, `exo-watchdog`, Exo model metadata, embedding gateway, VNC/Chrome CDP through platform-upload |
 | Arb | `apps/arb/` | always-on trading services plus scheduled maintenance | `collector`, `strategy`, `executor-kalshi`, `resolver`, `validator`, `arb-executor-polymarket` | `arb-redis`, `shared-postgres` database `arb`, `shared-qdrant`, `exo-watchdog`, Exo model metadata, Polymarket VPN namespace |
 | News | `apps/news/` and Mac3 native service dirs | always-on API plus scheduled collector | `news-server`, `news-collector` | `shared-postgres` database `news`, `shared-qdrant`, `exo-watchdog`, Exo model metadata, embedding gateway |
@@ -59,7 +61,9 @@ Detailed service notes live under `docs/services/`:
 
 | Compose file | Services started | Purpose |
 | --- | --- | --- |
-| `apps/dashboard/docker-compose.yml` | `dashboard` | privileged operations UI/API |
+| `Constructure-repos/constructure-runtime-control/docker-compose.yml` | `runtime-control` | privileged operations API |
+| `Constructure-repos/ibkr/docker-compose.yml` | `ibkr` | broker adapter and portfolio/order API |
+| `apps/dashboard/docker-compose.yml` | `dashboard` | UI and BFF proxy |
 | `apps/VideoProcess/docker-compose.yml` | `api`, `frontend` | media workflow API and UI |
 | `apps/arb/docker-compose.yml` | `collector`, `strategy`, `executor-kalshi` | live market ingestion, arbitrage detection, Kalshi execution |
 
@@ -102,15 +106,15 @@ directory.
 
 | Infra capability | App consumers |
 | --- | --- |
-| `shared-postgres` | VideoProcess (`videoprocess`), Arb (`arb`), News (`news`), Dashboard read/control routes |
-| `shared-qdrant` | Arb resolver, News indexing/search, VideoProcess retrieval/embedding features, Dashboard status views |
-| `arb-redis` | Arb collector/strategy/executors, Dashboard arb state views |
+| `shared-postgres` | VideoProcess (`videoprocess`), Arb (`arb`), News (`news`), IBKR (`ibkr`), Runtime Control (`runtime_control`) |
+| `shared-qdrant` | Arb resolver, News indexing/search, VideoProcess retrieval/embedding features, Runtime Control status views |
+| `arb-redis` | Arb collector/strategy/executors, IBKR watchlists/alerts, Runtime Control arb state views |
 | `vp-redis` | VideoProcess API and workers |
 | MinIO | VideoProcess object/file storage when S3-compatible storage is enabled |
-| `exo-watchdog` and Exo model metadata | VideoProcess LLM flows, Arb validator, News collector summaries, Dashboard health views |
+| `exo-watchdog` and Exo model metadata | VideoProcess LLM flows, Arb validator, News collector summaries, Runtime Control health views |
 | Embedding gateway | News and embedding workloads, VideoProcess when configured for remote embeddings |
 | `vnc-manager.service` and Chrome CDP | Platform-browser services, `x-bot`, browser-login workflows, dashboard IBKR visibility |
-| IB Gateway | Dashboard market/portfolio routes and any app route that needs IBKR quotes |
+| IB Gateway | Canonical `ibkr` service; other apps consume IBKR through the local IBKR API |
 | Polymarket VPN namespace | `arb-executor-polymarket` |
 
 ## Operational Commands

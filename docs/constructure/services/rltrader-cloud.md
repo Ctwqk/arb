@@ -2,7 +2,8 @@
 
 ## Overview
 
-Reinforcement learning trading cloud infrastructure with Milvus vector database.
+Reinforcement learning trading cloud infrastructure with AlphaVantage helpers,
+ML scripts, and Milvus vector database experiments.
 
 ## Tech Stack
 
@@ -12,7 +13,7 @@ Reinforcement learning trading cloud infrastructure with Milvus vector database.
 ## Dependencies
 
 - Milvus
-- IBKR integration
+- Canonical IBKR API through `IBKR_API_URL` when trading data is needed
 
 ## Startup
 
@@ -26,7 +27,7 @@ docker compose up -d
 ```
 rltrader-cloud/
 ├── alpha/                   # Alpha strategies
-├── ibkr/                   # Interactive Brokers integration
+├── ibkr_client.py           # HTTP client for canonical IBKR service
 ├── infra/                  # Infrastructure
 ├── milvus/                 # Milvus configuration
 ├── ml/                     # Machine learning models

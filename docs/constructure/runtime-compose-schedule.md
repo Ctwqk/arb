@@ -51,7 +51,7 @@ crontab -l
 Cron log:
 
 ```bash
-tail -f dashboard/data/cronlogs/cronwrap.jsonl
+tail -f /home/taiwei/Constructure-repos/constructure-runtime-control/data/cronlogs/cronwrap.jsonl
 ```
 
 ## Machine Roles
@@ -95,6 +95,10 @@ Support services and host infrastructure:
   - manages `x11vnc :5999`
   - manages `chrome-cdp :18810`
   - manages `ibkr-gateway :4001`
+- `constructure-runtime-control`
+  - owns Docker, process, cron, env, and runtime status APIs
+- `ibkr`
+  - owns market data, portfolio groups, watchlists, and order-run APIs
 - `constructure-polymarket.service`
   - starts the Polymarket VPN namespace and `arb-executor-polymarket`
 

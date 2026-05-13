@@ -32,7 +32,7 @@ capabilities; apps and platform-upload consume them.
 
 | Capability | Runtime owner | Default endpoint | Main consumers |
 | --- | --- | --- | --- |
-| Shared PostgreSQL | `infra/shared-infra/docker-compose.yml` service `shared-postgres` | `127.0.0.1:5435` | VideoProcess, arb, news, dashboard |
+| Shared PostgreSQL | `infra/shared-infra/docker-compose.yml` service `shared-postgres` | `127.0.0.1:5435` | VideoProcess, arb, news, IBKR, runtime-control |
 | Shared Qdrant | `infra/shared-infra/docker-compose.yml` service `shared-qdrant` | `http://127.0.0.1:6333`, gRPC `127.0.0.1:6334` | arb resolver, news, VideoProcess, dashboard |
 | Arb Redis | `infra/shared-infra/docker-compose.yml` service `arb-redis` | `redis://127.0.0.1:6379` | arb services, dashboard |
 | VideoProcess Redis | `infra/shared-infra/docker-compose.yml` service `vp-redis` | `redis://127.0.0.1:6380` | VideoProcess API and workers |
@@ -41,7 +41,7 @@ capabilities; apps and platform-upload consume them.
 | Exo model metadata | `infra/exo/model.txt`, scripts in `infra/exo/` | Local file and watchdog/state APIs | Services that need the active local LLM model |
 | Embedding gateway | `infra/embedding-gateway/` native service on Mac3 | `http://10.0.0.126:17056` in current schedule status | News and embedding workloads |
 | Desktop/VNC manager | `infra/vnc-manager/vnc-manager.service` | API `127.0.0.1:7799`, VNC `127.0.0.1:5999`, Chrome CDP `127.0.0.1:18810` | browser automation, X/Bilibili publishing, IBKR |
-| IB Gateway | managed by `infra/vnc-manager/apps.yaml` | `127.0.0.1:4001` | arb/dashboard market data integrations |
+| IB Gateway | managed by `infra/vnc-manager/apps.yaml` | `127.0.0.1:4001` | canonical IBKR service |
 | Polymarket VPN namespace | `ops/systemd/constructure-polymarket.service` plus `infra/polymarket/` | namespace `vpn-polymarket` | `arb-executor-polymarket` |
 
 ## Shared Datastores
@@ -60,6 +60,8 @@ The init script creates these roles and databases:
 | `vp` | `videoprocess` | VideoProcess |
 | `arb` | `arb` | arbitrage system |
 | `news` | `news` | news collector/server |
+| `ibkr` | `ibkr` | canonical IBKR portfolio/order-run service |
+| `runtime_control` | `runtime_control` | privileged runtime-control service |
 
 If a new app needs relational storage, prefer adding a dedicated database and
 role to `infra/shared-infra/init/001-create-databases.sh` instead of starting a
@@ -164,20 +166,23 @@ specific network exposure requirement:
 When `VNC_MANAGER_API_TOKEN` is set, status scripts pass it through to the
 manager API using the `Authorization: Bearer ...` header.
 
-### Dashboard Control Plane
+### Runtime Control And Dashboard
 
-The dashboard can start, stop, and inspect host containers, processes, cron
-entries, and env files. It should be treated as a privileged control plane, not
-as a public web app.
+`constructure-runtime-control` can start, stop, and inspect host containers,
+processes, cron entries, and env files. It should be treated as a privileged
+control plane, not as a public web app.
 
 Default access is local-only for SSH tunnel use:
 
+- `RUNTIME_CONTROL_BIND_HOST=127.0.0.1`
+- `RUNTIME_CONTROL_API_TOKEN=` optional bearer token for `/api/*`
 - `DASHBOARD_BIND_HOST=127.0.0.1`
 - `DASHBOARD_API_TOKEN=` optional bearer token for `/api/*`
 - `DASHBOARD_CORS_ORIGINS=http://127.0.0.1:7700,http://localhost:7700`
 
-If `DASHBOARD_API_TOKEN` is set, static UI assets remain public on the local
-listener, but every `/api/*` request must include `Authorization: Bearer <token>`.
+The dashboard is a UI/BFF proxy. If `DASHBOARD_API_TOKEN` is set, static UI
+assets remain public on the local listener, but every `/api/*` request must
+include `Authorization: Bearer <token>`.
 
 ### Polymarket Namespace
 
