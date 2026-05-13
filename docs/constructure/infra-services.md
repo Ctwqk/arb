@@ -68,6 +68,16 @@ role to `infra/shared-infra/init/001-create-databases.sh` instead of starting a
 new Postgres container. Do not assume app-local standalone Postgres profiles are
 active in production.
 
+Existing Postgres volumes do not re-run Docker init scripts. After adding a new
+shared database role, run the idempotent provisioner once:
+
+```bash
+bash ops/database/provision-shared-postgres.sh
+```
+
+The IBKR migration script also runs this provisioner before it copies `ibkr_*`
+tables into the canonical `ibkr` database.
+
 ### Qdrant
 
 `shared-qdrant` is the shared vector database. It exposes HTTP on `6333` and

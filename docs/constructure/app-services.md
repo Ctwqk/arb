@@ -147,6 +147,9 @@ bash ops/compose/interactive-tools-stop.sh
   runtime class, services, and infra dependencies.
 - Prefer `infra/shared-infra` dependencies over app-local Postgres, Redis,
   Qdrant, MinIO, browser managers, or LLM gateways.
+- When adding a shared Postgres role to an existing runtime, update the init
+  script and run `ops/database/provision-shared-postgres.sh`; Docker init files
+  only run for fresh volumes.
 - If an app adds a compose service, update the matching `ops/compose/*` or
   `ops/schedule/*` entrypoint before documenting it as active runtime.
 - Classify services as always-on, schedule-controlled, one-shot, or on-demand.
