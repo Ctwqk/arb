@@ -1,0 +1,13 @@
+[package]
+name = "strategy-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+arb-proto = { path = "../arb-proto" }
+env_logger = "0.11"
+log = "0.4"
+redis = { version = "0.27", features = ["aio", "connection-manager", "tokio-comp"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

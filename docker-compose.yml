@@ -1,0 +1,149 @@
+# ── Infrastructure ────────────────────────────────────────────────────────────
+#
+# All app services use network_mode: host so they bind to localhost (127.0.0.1).
+# This also lets the executor-polymarket container (launched separately inside
+# the vpn-polymarket namespace with --network=host) reach Redis via the veth
+# bridge IP configured by infra/scripts/setup-veth.sh.
+#
+# Ports exposed by infrastructure containers are bound to all interfaces so
+# that the vpn-polymarket namespace can reach them via the veth bridge.
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+x-restart: &always-restart
+  restart: unless-stopped
+
+x-env: &common-env
+  env_file: .env
+
+services:
+  redis:
+    profiles: ["standalone"]
+    image: redis:7-alpine
+    <<: *always-restart
+    network_mode: host
+    command: >
+      redis-server
+      --bind 0.0.0.0
+      --port 6379
+      --requirepass ${REDIS_PASSWORD:-arbredis}
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-arbredis}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  postgres:
+    profiles: ["standalone"]
+    image: postgres:16-alpine
+    <<: *always-restart
+    network_mode: host
+    environment:
+      POSTGRES_DB: arb
+      POSTGRES_USER: arb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arb}
+      PGPORT: 5432
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *default-logging
+
+  vectordb:
+    profiles: ["standalone"]
+    image: qdrant/qdrant:v1.12.1
+    <<: *always-restart
+    network_mode: host
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  collector:
+    build:
+      context: .
+      dockerfile: rust/collector-rs/Dockerfile
+    <<: [*always-restart, *common-env]
+    network_mode: host
+    logging: *default-logging
+
+  resolver:
+    build:
+      context: .
+      dockerfile: services/resolver/Dockerfile
+      args:
+        TORCH_INDEX_URL: ${RESOLVER_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+        TORCH_VERSION: ${RESOLVER_TORCH_VERSION:-2.5.1}
+    <<: [*always-restart, *common-env]
+    cpus: "1.0"
+    network_mode: host
+    logging: *default-logging
+
+  strategy:
+    build:
+      context: .
+      dockerfile: rust/strategy-rs/Dockerfile
+    <<: [*always-restart, *common-env]
+    network_mode: host
+    logging: *default-logging
+
+  executor-kalshi:
+    build:
+      context: .
+      dockerfile: services/executor-kalshi/Dockerfile
+    <<: [*always-restart, *common-env]
+    network_mode: host
+    logging: *default-logging
+
+  validator:
+    build:
+      context: .
+      dockerfile: services/validator/Dockerfile
+    <<: [*always-restart, *common-env]
+    network_mode: host
+    environment:
+      DEPLOY_MODE: ${DEPLOY_MODE:-shared}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://127.0.0.1:8000/v1}
+      EXO_MODEL_FILE: /run/exo/model.txt
+      LLM_MODEL: ${LLM_MODEL:-}
+      VALIDATOR_INTERVAL_SECS: ${VALIDATOR_INTERVAL_SECS:-300}
+    volumes:
+      - ../../infra/exo/model.txt:/run/exo/model.txt:ro
+    logging: *default-logging
+
+  executor-polymarket:
+    build:
+      context: .
+      dockerfile: services/executor-polymarket/Dockerfile
+    profiles:
+      - build-only   # exclude from `docker-compose up`
+    network_mode: host
+    env_file: .env
+    logging: *default-logging
+
+volumes:
+  redis-data:
+  postgres-data:
+  qdrant-data:

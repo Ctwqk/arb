@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "rust/arb-proto",
+  "rust/collector-rs",
+  "rust/strategy-rs",
+]
+resolver = "2"
