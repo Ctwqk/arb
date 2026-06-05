@@ -1,250 +1,161 @@
 # Infra Services
 
-This document is the agent-facing reference for the Constructure infra layer.
-Use it when adding or changing application services so shared runtime
-dependencies are reused instead of duplicated.
+This document is the agent-facing reference for the current Constructure
+runtime. Use it when changing application services so production keeps one
+shared infra layer instead of recreating databases or browser managers inside
+each app.
 
-## Layer Model
+Status date: 2026-05-29.
 
-Constructure is not a strict two-layer system, but the dependency model has one
-base layer:
+## Current Topology
 
-```text
-infra
-|-- platform-upload
-|-- apps
-|-- schedule
-`-- on-demand
-```
+| Host | Role | Runtime identity |
+| --- | --- | --- |
+| `10.0.0.150` / `ccttww-lap` | Swarm manager, shared infrastructure, GPU services, dashboard, IBKR, VNC/browser state | Docker Swarm manager node `ccttww-lap` |
+| `10.0.0.126` / `CASPERs-Mac-mini.local` | ForWin and news application runtime | Colima/Swarm node `colima-swarmbridged`; host forwards expose app ports |
+| `10.0.0.127` / `Wenjies-Mac-mini.local` | VideoProcess, PDS, feature aggregator, and arb application runtime | Colima/Swarm node `colima-127`; host forwards expose app ports |
 
-- `infra/` owns shared support services and host-native runtime primitives.
-- `apps/` owns application services such as VideoProcess, arb, dashboard, news,
-  news-publisher, gmail-bridge, and job-autoflow.
-- `platform-upload/` is a separate app-adjacent layer for browser automation and
-  publisher backends. It depends on infra and is consumed by some apps.
-- `schedule` and `on-demand` are control surfaces, not separate product
-  projects. They also depend on infra.
+Constructure as a folder/concept exists only on `10.0.0.150`. The two Mac
+hosts should keep project-specific directories such as `ForWin-swarm` and
+`VideoProcess-app`; do not create a new Constructure root there for production
+apps.
 
-For most development decisions, think in two groups: infra provides shared
-capabilities; apps and platform-upload consume them.
+## Source And Deployment Boundaries
+
+Production is deployed by GitHub-tracked repositories, but the runtime copies on
+126 and 127 are mostly deployment directories.
+
+| Project | Source-of-truth edit location | Production target |
+| --- | --- | --- |
+| ForWin | `10.0.0.246:/home/kikuhiko/ForWin` on branch `master` | `10.0.0.126:/Users/magi1/ForWin-swarm` |
+| VideoProcess | Preferred dev checkout `10.0.0.246:/home/kikuhiko/videoprocess` on branch `main`; auxiliary checkouts `10.0.0.126:/Users/magi1/VideoProcess-app` and `10.0.0.150:/home/taiwei/Constructure-repos/videoprocess` | `10.0.0.127:/Users/wenjieliu/VideoProcess-app` |
+| Policy Decision Service | `10.0.0.150:/home/taiwei/Constructure-repos/policy-decision-service` | `10.0.0.127:/Users/wenjieliu/.deploy-build/policy-decision-service` |
+| VP Feature Aggregator | `10.0.0.150:/home/taiwei/Constructure-repos/vp-feature-aggregator` | `10.0.0.127:/Users/wenjieliu/.deploy-build/vp-feature-aggregator` |
+| Arb | `10.0.0.150:/home/taiwei/Constructure-repos/arb` | `10.0.0.127:/Users/wenjieliu/arb-swarm-src` |
+| News | GitHub repo `Ctwqk/news`; deploy mirror currently at `10.0.0.150:/home/taiwei/deploy-github-sync/repos/news` | `10.0.0.126:/Users/magi1/Constructure/news` |
+| IBKR | `10.0.0.150:/home/taiwei/Constructure-repos/ibkr` | 150 only |
+| Runtime control / dashboard / shared infra | `10.0.0.150:/home/taiwei/Constructure-repos/constructure-runtime*` | 150 only |
+
+The 126/127 directories with `.deploy-sync-project` and
+`.deploy-sync-source-commit` are deployment outputs. Do not create long-lived
+Codex coding projects there unless the task is explicitly about inspecting a
+deployed artifact.
 
 ## Infra Inventory
 
-| Capability | Runtime owner | Default endpoint | Main consumers |
-| --- | --- | --- | --- |
-| Shared PostgreSQL | `infra/shared-infra/docker-compose.yml` service `shared-postgres` | `127.0.0.1:5435` | VideoProcess, arb, news, IBKR, runtime-control |
-| Shared Qdrant | `infra/shared-infra/docker-compose.yml` service `shared-qdrant` | `http://127.0.0.1:6333`, gRPC `127.0.0.1:6334` | arb resolver, news, VideoProcess, dashboard |
-| Arb Redis | `infra/shared-infra/docker-compose.yml` service `arb-redis` | `redis://127.0.0.1:6379` | arb services, dashboard |
-| VideoProcess Redis | `infra/shared-infra/docker-compose.yml` service `vp-redis` | `redis://127.0.0.1:6380` | VideoProcess API and workers |
-| MinIO | `infra/shared-infra/docker-compose.yml` service `minio` | API `127.0.0.1:9000`, console `127.0.0.1:9001` | Object/file storage consumers |
-| Exo watchdog | `infra/exo-watchdog/docker-compose.yml` service `exo-watchdog` | `http://127.0.0.1:8000` | LLM-bound workloads, dashboard, news, VideoProcess, arb validator |
-| Exo model metadata | `infra/exo/model.txt`, scripts in `infra/exo/` | Local file and watchdog/state APIs | Services that need the active local LLM model |
-| Embedding gateway | `infra/embedding-gateway/` native service on Mac3 | `http://10.0.0.126:17056` in current schedule status | News and embedding workloads |
-| Desktop/VNC manager | `infra/vnc-manager/vnc-manager.service` | API `127.0.0.1:7799`, VNC `127.0.0.1:5999`, Chrome CDP `127.0.0.1:18810` | browser automation, X/Bilibili publishing, IBKR |
-| IB Gateway | managed by `infra/vnc-manager/apps.yaml` | `127.0.0.1:4001` | canonical IBKR service |
-| Polymarket VPN namespace | `ops/systemd/constructure-polymarket.service` plus `infra/polymarket/` | namespace `vpn-polymarket` | `arb-executor-polymarket` |
+All shared stateful infrastructure is centralized on `10.0.0.150`.
 
-## Shared Datastores
-
-### PostgreSQL
-
-`shared-postgres` is the canonical host PostgreSQL for shared-mode services.
-It runs with `network_mode: host`; apps usually connect through
-`host.docker.internal:5435` from containers or `127.0.0.1:5435` from host-native
-processes.
-
-The init script creates these roles and databases:
-
-| Role | Database | Intended consumer |
+| Capability | Production endpoint | Main consumers |
 | --- | --- | --- |
-| `vp` | `videoprocess` | VideoProcess |
-| `arb` | `arb` | arbitrage system |
-| `news` | `news` | news collector/server |
-| `ibkr` | `ibkr` | canonical IBKR portfolio/order-run service |
-| `runtime_control` | `runtime_control` | privileged runtime-control service |
+| Shared PostgreSQL | `10.0.0.150:5435` | ForWin, VideoProcess, PDS, arb, news, IBKR, runtime-control |
+| Shared Qdrant | HTTP `http://10.0.0.150:6333`, gRPC `10.0.0.150:6334` | news retrieval, arb matching, optional app vector features |
+| Arb Redis | `redis://10.0.0.150:6379` | arb orderbooks/state, arb app services |
+| VideoProcess Redis | `redis://10.0.0.150:6380` | VP queues, PDS/aggregator/event relay integration |
+| MinIO | API `http://10.0.0.150:9000`, console `http://10.0.0.150:9001` | object/artifact storage |
+| Redpanda | overlay `redpanda:9092`, host bridge `10.0.0.150:19092` | PDS, VP outbox relay, feature aggregator |
+| Embedding gateway | `http://10.0.0.150:8080` | news and arb embedding workloads |
+| Dashboard | SSH-tunneled `http://127.0.0.1:7700` on 150 | operator UI |
+| IBKR API | `http://127.0.0.1:7701` on 150 | dashboard IBKR tab and IBKR clients |
+| VNC manager | API `127.0.0.1:7799`, VNC `127.0.0.1:5999`, IB Gateway `127.0.0.1:4001` on 150 | durable browser desktop, IBKR login |
 
-If a new app needs relational storage, prefer adding a dedicated database and
-role to `infra/shared-infra/init/001-create-databases.sh` instead of starting a
-new Postgres container. Do not assume app-local standalone Postgres profiles are
-active in production.
+Applications may contain database code, migrations, compose files, and local
+development profiles. That does not mean production should start app-local
+Postgres, Redis, MinIO, or Qdrant on 126/127. Production containers connect to
+the 150-hosted infra endpoints or to Swarm service names when they are on the
+same overlay network.
 
-Existing Postgres volumes do not re-run Docker init scripts. After adding a new
-shared database role, run the idempotent provisioner once:
+## Application Entry Points
 
-```bash
-bash ops/database/provision-shared-postgres.sh
-```
+| Surface | URL / port | Notes |
+| --- | --- | --- |
+| ForWin UI/API | `http://10.0.0.126:8899` | Host-forwarded from the 126 Colima/Swarm runtime |
+| ForWin MCP | `10.0.0.126:8896` | Host-forwarded from the 126 runtime |
+| News server health/API | `http://10.0.0.126:6551` | Host-forwarded from the 126 runtime |
+| ForWin/browser helper ports | `10.0.0.126:18896`, `10.0.0.126:18899` | Host-forwarded browser/helper surfaces |
+| VideoProcess frontend | `http://10.0.0.127:3001` | Host-forwarded from the 127 Colima/Swarm runtime |
+| VideoProcess API | `http://10.0.0.127:18080` | Host-forwarded from the 127 runtime |
+| Dashboard | SSH tunnel to `10.0.0.150:7700` localhost | Do not expose directly on LAN without redesign |
+| IBKR VNC | SSH tunnel to `10.0.0.150:5999` localhost | Used for IBKR Mobile / Gateway login checks |
 
-The IBKR migration script also runs this provisioner before it copies `ibkr_*`
-tables into the canonical `ibkr` database.
+## Swarm Services
 
-### Qdrant
+Current production service names:
 
-`shared-qdrant` is the shared vector database. It exposes HTTP on `6333` and
-gRPC on `6334`. Services should namespace their collections clearly to avoid
-cross-app collisions.
+| Service | Normal replicas | Target role |
+| --- | --- | --- |
+| `forwin-app-swarm` | `1/1` | ForWin app on 126 |
+| `forwin-mcp-swarm` | `1/1` | ForWin MCP on 126 |
+| `news-server-swarm` | `1/1` | News API on 126 |
+| `news-collector-swarm` | `0/0` when disabled | News collector on 126 |
+| `vp-frontend-swarm` | `1/1` | VP frontend on 127 |
+| `vp-api-swarm` | `1/1` | VP API on 127 |
+| `vp-channel-agent-runner-swarm` | `1/1` | VP worker on 127 |
+| `vp-event-outbox-relay-swarm` | `1/1` | VP event relay on 127 |
+| `vp-pds-swarm` | `1/1` | PDS on 127 |
+| `vp-feature-aggregator-swarm` | `1/1` | Feature aggregator on 127 |
+| `arb-resolver-swarm` | scheduled by arb open/close window | Arb matching on 127 |
+| `arb-validator-swarm` | scheduled by arb open/close window | Arb validation on 127 |
+| `arb-executor-polymarket-swarm` | `1/1` | Wallet/VPN-bound execution; keep on 150 |
+| `redpanda` | `1/1` | Kafka/Redpanda bridge |
 
-Use this shared instance for search, embeddings, matching, and retrieval
-features unless there is a strong isolation reason to create a separate vector
-store.
+Do not infer service health only from repository files. Verify with
+`docker service ls`, browser checks for UI surfaces, and the `.deploy-sync-*`
+markers on target hosts.
 
-### Redis
+## Data Store Rules
 
-There are two Redis instances because the traffic patterns are different:
+- New production relational state should use a dedicated database/role inside
+  the 150 shared PostgreSQL instance.
+- New production queue/state traffic should reuse the appropriate 150 Redis
+  instance only when the workload matches that instance's purpose.
+- New object storage should use a dedicated MinIO bucket or prefix, not an
+  app-local MinIO container.
+- New vector data should use separate Qdrant collections in the 150 shared
+  Qdrant instance.
+- Do not start Postgres, Redis, MinIO, or Qdrant on 126/127 for production.
 
-- `arb-redis` on port `6379` uses a password and persistent append-only storage.
-  It is for orderbooks, arb state, and arb inter-service coordination.
-- `vp-redis` on port `6380` is for VideoProcess queues and scheduling state.
+## Browser, Desktop, And Market Access
 
-Do not reuse `arb-redis` for unrelated app queues. If an app needs a new queue,
-either justify sharing `vp-redis` or add a clearly named Redis service in infra.
-
-### MinIO
-
-`minio` is the shared S3-compatible object store. The default API port is
-`9000`; the console is on `9001`. Apps should use separate buckets and avoid
-writing directly into another app's bucket prefix.
-
-## AI And Embedding Services
-
-### Exo Watchdog
-
-`exo-watchdog` is the local LLM control-plane service. It monitors the Exo
-cluster, exposes a stable request ingress, tracks model state, handles stale-job
-recovery, and can coordinate remote restarts when configured.
-
-Important defaults from the compose file:
-
-- Service URL: `http://127.0.0.1:8000`
-- Upstream Exo endpoints: `http://192.168.20.1:52415` and
-  `http://192.168.20.2:52415`
-- Desired model: `mlx-community/Qwen3-30B-A3B-4bit`
-- Runtime data: `infra/exo-watchdog/data/watchdog.db`
-
-Apps that need local LLM calls should depend on this service rather than calling
-individual Exo nodes directly.
-
-### Exo Model Helpers
-
-`infra/exo/` is runtime glue for discovering and syncing the active model. The
-most important file for consumers is `infra/exo/model.txt`, which is mounted
-read-only into services that need the active model name.
-
-Use `infra/exo/resolve_model.sh` or `infra/exo/update_models.sh` when a service
-needs to refresh model metadata.
-
-### Embedding Gateway
-
-`infra/embedding-gateway/` is a FastAPI service backed by
-`sentence-transformers`. It exposes:
-
-- `GET /health`
-- `GET /metadata`
-- `POST /embed`
-
-The Dockerfile exposes port `8080`, but current schedule status reports the
-Mac3 native service as `embedding-gateway: running:17056`. Treat the runtime
-port as environment-specific and read it from the schedule/service config before
-hard-coding a client.
-
-## Desktop, Browser, And Market Access
-
-### VNC Manager
-
-`vnc-manager.service` is host-native systemd infrastructure. It owns the virtual
-desktop and keeps browser/desktop processes alive:
+`vnc-manager.service` on 150 owns the virtual desktop:
 
 - Xvfb display `:99`
-- x11vnc on port `5999`, bound to localhost by default
-- manager API on port `7799`, bound to `127.0.0.1` by default
-- Chrome CDP on port `18810`
-- IB Gateway on port `4001`
+- x11vnc `127.0.0.1:5999`
+- manager API `127.0.0.1:7799`
+- managed Chrome/CDP sessions
+- IB Gateway `127.0.0.1:4001`
 
-The managed apps are configured in `infra/vnc-manager/apps.yaml`.
+IBKR remains 150-only because it depends on local VNC state, localhost Gateway
+ports, and account login. Arb Polymarket execution remains tied to the 150 VPN
+namespace/wallet path unless that networking model is redesigned.
 
-Use this service when work needs a durable headed browser session, login state,
-or IBKR Gateway access. Do not start a second Xvfb/IBKR manager for app code;
-that will fight with this service.
+## Deployment Sync
 
-The default access model is SSH/tmux tunnel first. Override only when you have a
-specific network exposure requirement:
-
-- `VNC_MANAGER_API_HOST=127.0.0.1`
-- `VNC_MANAGER_API_TOKEN=` optional bearer token for the manager API
-- `VNC_MANAGER_VNC_LOCALHOST=true`
-
-When `VNC_MANAGER_API_TOKEN` is set, status scripts pass it through to the
-manager API using the `Authorization: Bearer ...` header.
-
-### Runtime Control And Dashboard
-
-`constructure-runtime-control` can start, stop, and inspect host containers,
-processes, cron entries, and env files. It should be treated as a privileged
-control plane, not as a public web app.
-
-Default access is local-only for SSH tunnel use:
-
-- `RUNTIME_CONTROL_BIND_HOST=127.0.0.1`
-- `RUNTIME_CONTROL_API_TOKEN=` optional bearer token for `/api/*`
-- `DASHBOARD_BIND_HOST=127.0.0.1`
-- `DASHBOARD_API_TOKEN=` optional bearer token for `/api/*`
-- `DASHBOARD_CORS_ORIGINS=http://127.0.0.1:7700,http://localhost:7700`
-
-The dashboard is a UI/BFF proxy. If `DASHBOARD_API_TOKEN` is set, static UI
-assets remain public on the local listener, but every `/api/*` request must
-include `Authorization: Bearer <token>`.
-
-### Polymarket Namespace
-
-`constructure-polymarket.service` is a host systemd unit that prepares the
-`vpn-polymarket` Linux network namespace with `sing-box`, then starts
-`arb-executor-polymarket`. It is intentionally outside the normal compose
-lifecycle because it manages host networking.
-
-Do not move this into app compose without redesigning the namespace and cleanup
-model. App services that need Polymarket execution should treat the namespace
-and executor as infra-managed runtime.
-
-## Operational Commands
-
-Start and inspect the infra layer:
+The 150 cron job runs:
 
 ```bash
-bash ops/compose/infra-up.sh
-bash ops/compose/infra-status.sh
+/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply
 ```
 
-Inspect the complete host runtime:
+It tracks GitHub branches, builds deploy images, rsyncs target directories to
+126/127, updates Swarm services, and writes `.deploy-sync-project` plus
+`.deploy-sync-source-commit` markers. ForWin changes must be made in the 246
+ForWin repo and pushed to `master` before this deploy path can pick them up.
+
+## Triage Commands
 
 ```bash
-bash ops/compose/host-core-status.sh
-bash ops/schedule/schedule-status.sh
+# Swarm and service distribution
+ssh 10.0.0.150 'docker node ls && docker service ls'
+
+# App browser entrypoints
+open http://10.0.0.126:8899
+open http://10.0.0.127:3001
+
+# API checks
+curl http://10.0.0.126:6551/health
+curl http://10.0.0.127:18080/api/v1/node-types
+
+# IBKR dashboard through SSH tunnel
+ssh -L 7700:127.0.0.1:7700 -L 5999:127.0.0.1:5999 10.0.0.150
+open http://127.0.0.1:7700
 ```
-
-Direct status checks that are often useful:
-
-```bash
-docker compose -f infra/shared-infra/docker-compose.yml ps
-docker compose -f infra/exo-watchdog/docker-compose.yml ps
-systemctl --user status vnc-manager.service
-systemctl status constructure-polymarket.service
-```
-
-## Development Rules For Agents
-
-- Reuse infra services before adding app-local databases, Redis instances,
-  browser managers, or LLM gateways.
-- Keep production/shared-mode config separate from standalone development
-  profiles. Several app compose files include `standalone` profiles for local
-  testing; those are not the current host runtime.
-- Use `host.docker.internal` for container-to-host infra access when existing
-  compose files follow that pattern.
-- Add new shared databases, ports, credentials, and buckets to this document
-  when changing infra.
-- Do not commit secrets from `.env` files. Document variable names and defaults,
-  not live credentials.
-- Be careful with host-networked services. Many infra and app containers use
-  `network_mode: host`, so port collisions are production-impacting.
-- Treat `ops/compose/*` and `ops/schedule/*` as the public operational entry
-  points. Avoid teaching future agents to run ad hoc `docker compose up` commands
-  unless the command is scoped to a documented compose file.

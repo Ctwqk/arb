@@ -42,9 +42,37 @@ Kalshi API        Polymarket API
 
 | Component | Purpose |
 |---|---|
-| **Redis** | Orderbook cache + inter-service event streams (hot path) |
-| **PostgreSQL** | Trade history, analytics (cold path only) |
-| **Qdrant** | Vector similarity search for market matching |
+| **Redis** | Orderbook cache + inter-service event streams (hot path); production uses the 150 shared Redis endpoint |
+| **PostgreSQL** | Trade history, analytics (cold path only); production uses the 150 shared Postgres endpoint |
+| **Qdrant** | Vector similarity search for market matching; production uses the 150 shared Qdrant endpoint |
+
+## Production Runtime
+
+Current production is split between the 127 Swarm app node and 150-only market
+execution infrastructure.
+
+| Service | Production location | Notes |
+|---|---|---|
+| `arb-resolver-swarm` | 127 Colima/Swarm node | Scaled by the arb open/close schedule; uses 150 embedding/Qdrant/Redis |
+| `arb-validator-swarm` | 127 Colima/Swarm node | Scaled by the arb open/close schedule; uses 150 LLM/Redis/Postgres |
+| `arb-executor-polymarket-swarm` | 150 | Kept with wallet/VPN namespace and account/networking state |
+
+Source changes should be made in
+`10.0.0.150:/home/taiwei/Constructure-repos/arb` and pushed to GitHub. The 150
+deploy sync job deploys the app copy to
+`10.0.0.127:/Users/wenjieliu/arb-swarm-src`; that 127 directory is not the
+source-of-truth git workspace.
+
+Production dependencies are provided by the 150 infra layer:
+
+- Arb Redis: `redis://10.0.0.150:6379`
+- Postgres: `10.0.0.150:5435`
+- Qdrant: `http://10.0.0.150:6333`
+- Embedding gateway: `http://10.0.0.150:8080`
+
+Do not start an arb-local Postgres, Redis, or Qdrant for production. The compose
+and Makefile flows below are still useful for local development and isolated
+tests.
 
 ## Arbitrage Logic
 
@@ -64,7 +92,10 @@ The system evaluates both legs (buy YES on Kalshi + NO on Polymarket, and vice v
 
 ## Networking
 
-All services use `network_mode: host`. The Polymarket executor runs separately inside the `vpn-polymarket` Linux network namespace so its traffic routes through the VPN (sing-box).
+Legacy local compose flows use `network_mode: host`. Production app services run
+under Swarm with explicit 150 infra endpoints. The Polymarket executor remains
+on 150 inside the `vpn-polymarket` Linux network namespace so its traffic routes
+through the VPN (sing-box).
 
 A veth pair bridges the namespaces:
 - Main namespace: `veth-arb-main` @ `192.168.100.1/30`
